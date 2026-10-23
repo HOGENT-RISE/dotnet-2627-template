@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Rise.Domain.Products;
+using Rise.Persistence;
 using Rise.Services.Products;
 using Rise.Shared.Common;
 using Rise.Shared.Products;
@@ -353,9 +354,7 @@ public class ProductServiceShould(
         result.Value.Products.ShouldBeEmpty();
     }
 
-    private static async Task SeedProductsAsync(
-        Rise.Persistence.ApplicationDbContext dbContext,
-        params (string Name, string Description)[] products)
+    private static async Task SeedProductsAsync(ApplicationDbContext dbContext, params (string Name, string Description)[] products)
     {
         dbContext.Products.AddRange(products.Select(p => new Product
         {
@@ -364,5 +363,41 @@ public class ProductServiceShould(
         }));
 
         await dbContext.SaveChangesAsync();
+    }
+    
+    [Fact]
+    public async Task ReturnFilteredTotalCountWhenSearchingWithPagination()
+    {
+        // Arrange
+        await using var dbContext = CreateDbContext();
+
+        await SeedProductsAsync(dbContext,
+            ("Apple", "Fruit"),
+            ("Apple Juice", "Drink"),
+            ("Apple Pie", "Dessert"),
+            ("Banana", "Fruit"),
+            ("Orange", "Fruit"));
+
+        var service = new ProductService(dbContext);
+
+        var request = new QueryRequest.SkipTake
+        {
+            SearchTerm = "Apple",
+            Skip = 1,
+            Take = 1
+        };
+
+        // Act
+        var result = await service.GetIndexAsync(request, CancellationToken.None);
+
+        // Assert
+        result.IsSuccess.ShouldBeTrue();
+
+        // 5 products globally, 3 matching the search
+        result.Value.TotalCount.ShouldBe(3);
+
+        // Pagination returns only 1 product
+        result.Value.Products.Count().ShouldBe(1);
+        result.Value.Products.Single().Name.ShouldBe("Apple Juice");
     }
 }
