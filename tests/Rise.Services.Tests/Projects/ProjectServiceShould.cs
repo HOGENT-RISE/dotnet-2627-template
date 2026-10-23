@@ -1,41 +1,33 @@
 ﻿using System.Security.Claims;
-using Ardalis.Result;
-using Microsoft.EntityFrameworkCore;
 using Rise.Domain.Projects;
-using Rise.Persistence;
 using Rise.Services.Projects;
 using Rise.Services.Tests.Fakers;
 using Rise.Shared.Projects;
 
 namespace Rise.Services.Tests.Projects;
 
-public class ProjectServiceShould
+public class ProjectServiceShould(DatabaseFixture database, ITestOutputHelper output) : DatabaseTest(database, output)
 {
-    
     [Fact]
     public async Task EditProjectWhenTechnicianIsTheSame()
     {
         // Arrange
-        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
-            .UseInMemoryDatabase(databaseName: nameof(EditProjectWhenTechnicianIsTheSame)) // Do NOT use InMemoryDatabase... it's not reliable. Use a real database and come up with a strategy to clean up the database between tests.
-            .Options;
-        
-        using var dbContext = new ApplicationDbContext(options);
+        await using var dbContext = CreateDbContext();
 
         var technicianAccountId = Guid.NewGuid().ToString();
         var technician = new Technician("FName", "LName", technicianAccountId);
-        var project = new Project("Old Project", technician, new Address("Street", "Bus", "City", "Zip"));
+        var project = new Project(
+            "Old Project",
+            technician,
+            new Address("Street", "Bus", "City", "Zip"));
 
         dbContext.Technicians.Add(technician);
         dbContext.Projects.Add(project);
         await dbContext.SaveChangesAsync();
+        Log.Information("Done Arranging");
 
-        var claimsPrincipal = new ClaimsPrincipal(new ClaimsIdentity([
-            new Claim(ClaimTypes.NameIdentifier, technicianAccountId)
-        ], "mock"));
-
+        var claimsPrincipal = CreateClaimsPrincipal(technicianAccountId);
         var sessionProvider = new FakeSessionContextProvider(claimsPrincipal);
-
         var service = new ProjectService(dbContext, sessionProvider);
 
         var request = new ProjectRequest.Edit
@@ -44,41 +36,49 @@ public class ProjectServiceShould
             Name = "New Project"
         };
 
-        // Act
+        Log.Information("Acting");
         var result = await service.EditAsync(request);
 
-        // Assert
+        Log.Information("Asserting");
         result.IsSuccess.ShouldBeTrue();
-        var updatedProject = await dbContext.Projects.FirstAsync();
+
+        await using var verificationContext = CreateDbContext();
+
+        var updatedProject = await verificationContext.Projects
+            .SingleAsync(p => p.Id == project.Id);
+
         updatedProject.Name.ShouldBe("New Project");
     }
-    
+
     [Fact]
     public async Task NotEditProjectWhenTechnicianIsDifferent()
     {
         // Arrange
-        var options = new DbContextOptionsBuilder<ApplicationDbContext>()
-            .UseInMemoryDatabase(databaseName: nameof(NotEditProjectWhenTechnicianIsDifferent)) // Do NOT use InMemoryDatabase... it's not reliable. Use a real database and come up with a strategy to clean up the database between tests.
-            .Options;
-        
-        using var dbContext = new ApplicationDbContext(options);
+        await using var dbContext = CreateDbContext();
 
         var correctTechAccountId = Guid.NewGuid().ToString();
         var otherTechAccountId = Guid.NewGuid().ToString();
 
-        var projectTechnician = new Technician("FName", "LName", correctTechAccountId);
-        var loggedInTechnician = new Technician("Other", "Tech", otherTechAccountId);
+        var projectTechnician = new Technician(
+            "FName",
+            "LName",
+            correctTechAccountId);
 
-        var project = new Project("Old Project", projectTechnician, new Address("Street", "Bus", "City", "Zip"));
+        var loggedInTechnician = new Technician(
+            "Other",
+            "Tech",
+            otherTechAccountId);
+
+        var project = new Project(
+            "Old Project",
+            projectTechnician,
+            new Address("Street", "Bus", "City", "Zip"));
 
         dbContext.Technicians.AddRange(projectTechnician, loggedInTechnician);
         dbContext.Projects.Add(project);
         await dbContext.SaveChangesAsync();
 
-        var claimsPrincipal = new ClaimsPrincipal(new ClaimsIdentity([
-            new Claim(ClaimTypes.NameIdentifier, otherTechAccountId)
-        ], "mock"));
-
+        var claimsPrincipal = CreateClaimsPrincipal(otherTechAccountId);
         var sessionProvider = new FakeSessionContextProvider(claimsPrincipal);
         var service = new ProjectService(dbContext, sessionProvider);
 
@@ -94,7 +94,20 @@ public class ProjectServiceShould
         // Assert
         result.IsSuccess.ShouldBeFalse();
         result.Status.ShouldBe(ResultStatus.Unauthorized);
-        var unchangedProject = await dbContext.Projects.FirstAsync();
+
+        await using var verificationContext = CreateDbContext();
+
+        var unchangedProject = await verificationContext.Projects
+            .SingleAsync(p => p.Id == project.Id);
+
         unchangedProject.Name.ShouldBe("Old Project");
+    }
+
+    private static ClaimsPrincipal CreateClaimsPrincipal(string accountId)
+    {
+        return new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim(ClaimTypes.NameIdentifier, accountId)
+        ], "mock"));
     }
 }
